@@ -21,19 +21,28 @@ MemoryLifecycle/
 ├── docs/
 │   ├── 01-gc.md
 │   ├── 02-gc-modes.md
+│   ├── 03-disposable.md
 │   └── screenshots/
 └── src/
     └── MemoryLifecycle/
         ├── MemoryLifecycle.csproj
         ├── Program.cs
-        └── Gc/
-            ├── GcModeScenarios.cs
-            ├── GcObserver.cs
-            ├── GcSnapshot.cs
-            └── PressureScenarios.cs
+        ├── Demos/
+        │   └── ResourceDemos.cs
+        ├── Gc/
+        │   ├── GcModeScenarios.cs
+        │   ├── GcObserver.cs
+        │   ├── GcSnapshot.cs
+        │   └── PressureScenarios.cs
+        └── Resources/
+            ├── FakeResource.cs
+            ├── LogFile.cs
+            └── ManagedResource.cs
 ```
 
 - `Gc` — снимки счётчиков GC и сценарии нагрузки;
+- `Resources` — классы, управляющие ресурсами;
+- `Demos` — консольные сценарии;
 - `docs` — отчёты по темам и скриншоты запусков.
 
 ## Сборка и запуск
@@ -49,11 +58,13 @@ dotnet build src/MemoryLifecycle/MemoryLifecycle.csproj -c Release
 | КТ №40 | `dotnet run --project src/MemoryLifecycle -c Release -- gc-pressure` | Поколения и давление на кучу |
 | КТ №41 | `dotnet run --project src/MemoryLifecycle -c Release -- gc-modes` | Многопоточная аллокация в текущем режиме GC |
 | КТ №41 | `dotnet run --project src/MemoryLifecycle -c Release -- gc-modes --compare` | Запуск в Workstation и Server GC и сравнение |
+| КТ №42 | `dotnet run --project src/MemoryLifecycle -c Release -- resources` | Финализатор, IDisposable, using |
 
 ```bash
 dotnet run --project src/MemoryLifecycle -c Release -- gc-pressure
 dotnet run --project src/MemoryLifecycle -c Release -- gc-modes
 dotnet run --project src/MemoryLifecycle -c Release -- gc-modes --compare
+dotnet run --project src/MemoryLifecycle -c Release -- resources
 ```
 
 Сравнение режимов GC вручную (PowerShell; в cmd.exe — `set DOTNET_gcServer=1`, в bash — `DOTNET_gcServer=1 dotnet run ...`):
@@ -72,6 +83,7 @@ Remove-Item Env:DOTNET_gcServer
 |---|---|---|
 | КТ №40 | 2 — «Измерение давления» | `GcSnapshot`, `GcObserver`, `PressureScenarios` |
 | КТ №41 | 2 — «Многопоточная аллокация» | `GcModeScenarios` |
+| КТ №42 | 2 — «Лог-файл» | `FakeResource`, `ManagedResource`, `LogFile`, `ResourceDemos` |
 
 ## Результаты
 
@@ -163,6 +175,58 @@ Remove-Item Env:DOTNET_gcServer
 ![gc-modes workstation](docs/screenshots/02-gc-modes-workstation.png)
 ![gc-modes server](docs/screenshots/02-gc-modes-server.png)
 ![gc-modes compare](docs/screenshots/02-gc-modes-compare.png)
+
+### КТ №42. Финализатор и IDisposable
+
+Команда: `dotnet run --project src/MemoryLifecycle -c Release -- resources`. Фрагмент вывода (полный — в отчёте):
+
+```text
+1. Финализатор: момент вызова не контролируется
+[FakeResource 1] открыт
+[FakeResource 2] открыт
+Метод завершён, финализаторы ещё не выполнялись
+[FakeResource 1] финализатор
+[FakeResource 2] финализатор
+После GC.Collect + WaitForPendingFinalizers
+
+2. using: детерминированное освобождение
+[ManagedResource 1] открыт
+Работа внутри using-блока
+[ManagedResource 1] Dispose вызван
+Строка после using-блока
+...
+4.1. Корректный сценарий: using-блок
+[LogFile 1] файл открыт: logs\memory-lifecycle-using.log
+Запись выполнена внутри using-блока
+[LogFile 1] файл закрыт
+После корректного using-блока
+
+4.2. Некорректный сценарий: без using и без Dispose
+[LogFile 2] файл открыт: logs\memory-lifecycle-leak.log
+Метод с забытым Dispose завершён
+[LogFile 2] финализатор! — файл не был закрыт явно
+После сборки: сработал финализатор
+
+4.3. using-декларация без скобок
+[LogFile 3] файл открыт: logs\memory-lifecycle-declaration.log
+Последняя строка метода: Dispose ещё не вызван
+[LogFile 3] файл закрыт
+После выхода из метода: файл уже закрыт
+```
+
+Выводы:
+
+1. **Финализатор недетерминирован**: после выхода из метода он не вызвался; сообщения появились только после
+   `GC.Collect()` + `GC.WaitForPendingFinalizers()`, поток финализации работает отдельно.
+2. **`Dispose()` детерминирован**: `using` вызывает его ровно на закрывающей скобке (и при исключении — `using`
+   разворачивается в `try/finally`); `using`-декларация — в конце области видимости переменной.
+3. **Забытый `Dispose()`** оставляет файл открытым до сборки; финализатор `LogFile` только сообщает об утечке
+   и не трогает управляемый `StreamWriter`, а `GC.SuppressFinalize` в `Dispose()` исключает ложные сообщения.
+   Повторный `Dispose()` ничего не делает, `Write()` после закрытия даёт `ObjectDisposedException`.
+
+Подробный отчёт: [docs/03-disposable.md](docs/03-disposable.md).
+
+![resources](docs/screenshots/03-resources.png)
 
 ## Автор
 

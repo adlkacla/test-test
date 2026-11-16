@@ -1,4 +1,5 @@
 using System.Globalization;
+using MemoryLifecycle.Demos;
 using MemoryLifecycle.Gc;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
@@ -23,11 +24,15 @@ switch (command)
     case "gc-modes":
         GcModeScenarios.RunParallelAllocation();
         break;
+    case "resources":
+        ResourceDemos.RunAll();
+        break;
     default:
         Console.WriteLine("Использование: dotnet run --project src/MemoryLifecycle -c Release -- <команда>");
         Console.WriteLine("  gc-pressure          КТ №40: поколения и давление на кучу");
         Console.WriteLine("  gc-modes             КТ №41: многопоточная аллокация в текущем режиме GC");
         Console.WriteLine("  gc-modes --compare   КТ №41: запуск в Workstation и Server GC и сравнение");
+        Console.WriteLine("  resources            КТ №42: финализатор, IDisposable, using");
         break;
 }
 
