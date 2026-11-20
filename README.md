@@ -22,12 +22,14 @@ MemoryLifecycle/
 │   ├── 01-gc.md
 │   ├── 02-gc-modes.md
 │   ├── 03-disposable.md
+│   ├── 04-dispose-pattern.md
 │   └── screenshots/
 └── src/
     └── MemoryLifecycle/
         ├── MemoryLifecycle.csproj
         ├── Program.cs
         ├── Demos/
+        │   ├── DisposeDemos.cs
         │   └── ResourceDemos.cs
         ├── Gc/
         │   ├── GcModeScenarios.cs
@@ -35,7 +37,9 @@ MemoryLifecycle/
         │   ├── GcSnapshot.cs
         │   └── PressureScenarios.cs
         └── Resources/
+            ├── DatabaseConnection.cs
             ├── FakeResource.cs
+            ├── FileBuffer.cs
             ├── LogFile.cs
             └── ManagedResource.cs
 ```
@@ -59,12 +63,16 @@ dotnet build src/MemoryLifecycle/MemoryLifecycle.csproj -c Release
 | КТ №41 | `dotnet run --project src/MemoryLifecycle -c Release -- gc-modes` | Многопоточная аллокация в текущем режиме GC |
 | КТ №41 | `dotnet run --project src/MemoryLifecycle -c Release -- gc-modes --compare` | Запуск в Workstation и Server GC и сравнение |
 | КТ №42 | `dotnet run --project src/MemoryLifecycle -c Release -- resources` | Финализатор, IDisposable, using |
+| КТ №43 | `dotnet run --project src/MemoryLifecycle -c Release -- dispose` | Паттерн Dispose, IAsyncDisposable |
+| Все | `dotnet run --project src/MemoryLifecycle -c Release -- all` | Итоговая демонстрация |
 
 ```bash
 dotnet run --project src/MemoryLifecycle -c Release -- gc-pressure
 dotnet run --project src/MemoryLifecycle -c Release -- gc-modes
 dotnet run --project src/MemoryLifecycle -c Release -- gc-modes --compare
 dotnet run --project src/MemoryLifecycle -c Release -- resources
+dotnet run --project src/MemoryLifecycle -c Release -- dispose
+dotnet run --project src/MemoryLifecycle -c Release -- all
 ```
 
 Сравнение режимов GC вручную (PowerShell; в cmd.exe — `set DOTNET_gcServer=1`, в bash — `DOTNET_gcServer=1 dotnet run ...`):
@@ -84,6 +92,7 @@ Remove-Item Env:DOTNET_gcServer
 | КТ №40 | 2 — «Измерение давления» | `GcSnapshot`, `GcObserver`, `PressureScenarios` |
 | КТ №41 | 2 — «Многопоточная аллокация» | `GcModeScenarios` |
 | КТ №42 | 2 — «Лог-файл» | `FakeResource`, `ManagedResource`, `LogFile`, `ResourceDemos` |
+| КТ №43 | 1 — «Соединение с БД» | `DatabaseConnection`, `FileBuffer`, `DisposeDemos` |
 
 ## Результаты
 
@@ -227,6 +236,52 @@ Remove-Item Env:DOTNET_gcServer
 Подробный отчёт: [docs/03-disposable.md](docs/03-disposable.md).
 
 ![resources](docs/screenshots/03-resources.png)
+
+### КТ №43. Паттерн Dispose и IAsyncDisposable
+
+Команда: `dotnet run --project src/MemoryLifecycle -c Release -- dispose`. Фрагмент вывода (полный — в отчёте):
+
+```text
+1. Синхронный сценарий using
+[DatabaseConnection 1] соединение открыто
+[DatabaseConnection 1] запрос: SELECT * FROM Students
+[DatabaseConnection 1] журнал запросов очищен
+[DatabaseConnection 1] соединение закрыто
+
+2. Асинхронный сценарий await using
+[DatabaseConnection 2] соединение открыто
+[DatabaseConnection 2] запрос: SELECT * FROM Topics
+[DatabaseConnection 2] журнал запросов очищен асинхронно
+[DatabaseConnection 2] соединение закрыто
+
+3. Проверка GC.SuppressFinalize после using
+[DatabaseConnection 3] соединение открыто
+[DatabaseConnection 3] запрос: SELECT 1
+[DatabaseConnection 3] журнал запросов очищен
+[DatabaseConnection 3] соединение закрыто
+После сборки: сообщение финализатора отсутствует
+
+4. Финализатор без Dispose
+[DatabaseConnection 4] соединение открыто
+[DatabaseConnection 4] запрос: UPDATE Students SET Name = 'Test'
+[DatabaseConnection 4] соединение закрыто
+После сборки: финализатор освободил только нативный ресурс
+```
+
+Выводы:
+
+1. **`Dispose(bool disposing)` разделяет ресурсы**: при `true` очищается управляемый журнал запросов и закрывается
+   соединение, при `false` (финализатор) — только соединение. В сценарии 4 строки «журнал запросов очищен» нет:
+   финализатор не трогает управляемые объекты.
+2. **`GC.SuppressFinalize`** вызывается и в `Dispose()`, и в `DisposeAsync()`: в сценарии 3 после сборки
+   повторного сообщения финализатора нет.
+3. **`await using` → `DisposeAsync()`** выполняет асинхронную очистку в `DisposeAsyncCore()`, затем в `finally`
+   закрывает нативный ресурс через `Dispose(false)`. Реализованы оба интерфейса, поэтому работает и `using`,
+   и `await using`; повторные `Dispose()`/`DisposeAsync()` ничего не делают.
+
+Подробный отчёт: [docs/04-dispose-pattern.md](docs/04-dispose-pattern.md).
+
+![dispose](docs/screenshots/04-dispose.png)
 
 ## Автор
 
