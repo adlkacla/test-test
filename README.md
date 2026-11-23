@@ -283,6 +283,44 @@ Remove-Item Env:DOTNET_gcServer
 
 ![dispose](docs/screenshots/04-dispose.png)
 
+## Выводы
+
+1. Основная нагрузка на Gen0 создаётся короткоживущими объектами; они умирают молодыми и не доходят до Gen2.
+2. Крупные объекты попадают в LOH, но счётчик Gen2 растёт только при сборке Gen2, а не при каждой аллокации.
+3. `GC.GetGCMemoryInfo()` описывает последнюю завершённую сборку, поэтому до первой сборки `HeapSizeBytes = 0`.
+4. Server GC не всегда быстрее: на короткой многопоточной нагрузке он проиграл Workstation GC по времени и паузам;
+   большее число сборок Gen0 объясняется несколькими кучами и DATAS, а не деградацией.
+5. Финализатор вызывается недетерминированно и служит последним шансом; `Dispose()` через `using` освобождает
+   ресурс детерминированно, в том числе при исключении.
+6. Полный паттерн Dispose разделяет управляемые и нативные ресурсы через `disposing`, а `GC.SuppressFinalize`
+   убирает объект из очереди финализации после явного освобождения.
+7. `IAsyncDisposable` и `await using` позволяют освобождать ресурсы асинхронно; реализуются оба интерфейса,
+   нативный ресурс в `DisposeAsync()` закрывается в `finally`.
+
+## Проверка готовности
+
+| Что проверяется | Состояние |
+|---|---|
+| Сборка | `dotnet build src/MemoryLifecycle/MemoryLifecycle.csproj -c Release` — 0 ошибок, 0 предупреждений |
+| Команды | `gc-pressure`, `gc-modes`, `resources`, `dispose`, `all` запускаются из корня репозитория |
+| docs | `01-gc.md`, `02-gc-modes.md`, `03-disposable.md`, `04-dispose-pattern.md` + скриншоты |
+| История | отдельный коммит на каждый этап |
+| Чистота | `bin`, `obj`, `.vs`, `logs` исключены в `.gitignore` |
+
+![build](docs/screenshots/00-build.png)
+
+## История коммитов
+
+| № | Сообщение коммита | Что входит |
+|---|---|---|
+| 0 | `chore: initialize .NET 10 console project` | Решение, проект, .gitignore, первый README |
+| 1 | `feat(gc): add generations and pressure measurement` | КТ №40: GcSnapshot, GcObserver, PressureScenarios, команда gc-pressure |
+| 2 | `feat(gc): compare workstation and server gc modes` | КТ №41: GcModeScenarios, измерение пауз, команда gc-modes |
+| 3 | `feat(resources): add finalizer and IDisposable examples` | КТ №42: FakeResource, ManagedResource, LogFile, команда resources |
+| 4 | `feat(dispose): implement full dispose pattern and IAsyncDisposable` | КТ №43: DatabaseConnection, FileBuffer, DisposeDemos, команда dispose |
+| 5 | `docs: add measurement results and conclusions` | README, docs, таблицы результатов, выводы |
+
+Полная история: `git log --oneline --graph`.
 ## Автор
 
 adlkalca, группа 10924-1.
